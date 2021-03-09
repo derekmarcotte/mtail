@@ -26,6 +26,18 @@ func (opt ProgramPath) apply(m *Server) error {
 	return nil
 }
 
+// LogUrls sets the urls to bind to listen for log events on the Server.
+func LogUrls(urls ...string) Option {
+	return logUrls(urls)
+}
+
+type logUrls []string
+
+func (opt logUrls) apply(m *Server) error {
+	m.logUrls = opt
+	return nil
+}
+
 // LogPathPatterns sets the patterns to find log paths in the Server.
 func LogPathPatterns(patterns ...string) Option {
 	return logPathPatterns(patterns)

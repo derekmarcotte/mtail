@@ -34,7 +34,10 @@ func (f *seqStringFlag) Set(value string) error {
 	return nil
 }
 
-var logs seqStringFlag
+var (
+	logs    seqStringFlag
+	logurls seqStringFlag
+)
 
 var (
 	port               = flag.String("port", "3903", "HTTP port to listen on.")
@@ -79,6 +82,7 @@ var (
 
 func init() {
 	flag.Var(&logs, "logs", "List of log files to monitor, separated by commas.  This flag may be specified multiple times.")
+	flag.Var(&logurls, "logurls", "List of network addresses to bind to, including protocol.  This flag may be specified multiple times.")
 }
 
 var (
@@ -130,8 +134,8 @@ func main() {
 		glog.Exitf("mtail requires programs that in instruct it how to extract metrics from logs; please use the flag -progs to specify the directory containing the programs.")
 	}
 	if !(*dumpBytecode || *dumpAst || *dumpAstTypes || *compileOnly) {
-		if len(logs) == 0 {
-			glog.Exitf("mtail requires the names of logs to follow in order to extract logs from them; please use the flag -logs one or more times to specify glob patterns describing these logs.")
+		if len(logs) == 0 && len(logurls) == 0 {
+			glog.Exitf("mtail requires the names of logs to follow in order to extract logs from them; please use the flag -logs or -logurls one or more times to specify glob patterns describing these logs.")
 		}
 	}
 
@@ -156,6 +160,7 @@ func main() {
 
 	opts := []mtail.Option{
 		mtail.ProgramPath(*progs),
+		mtail.LogUrls(logurls...),
 		mtail.LogPathPatterns(logs...),
 		mtail.IgnoreRegexPattern(*ignoreRegexPattern),
 		mtail.SetBuildInfo(buildInfo),

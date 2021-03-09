@@ -10,6 +10,7 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +40,9 @@ type Tailer struct {
 	globPatterns       map[string]struct{} // glob patterns to match newly created logs in dir paths against
 	ignoreRegexPattern *regexp.Regexp
 
+	logUrlsMu sync.RWMutex        // protects `logUrls'
+	logUrls   map[string]struct{} // which hostspecs do we bind to
+
 	oneShot bool
 
 	pollMu sync.Mutex // protects Poll()
@@ -65,6 +69,18 @@ func (n *niladicOption) apply(t *Tailer) error {
 
 // OneShot puts the tailer in one-shot mode, where sources are read once from the start and then closed.
 var OneShot = &niladicOption{func(t *Tailer) error { t.oneShot = true; return nil }}
+
+// LogUrls sets the glob patterns to use to match pathnames.
+type LogUrls []string
+
+func (opt LogUrls) apply(t *Tailer) error {
+	for _, u := range opt {
+		if err := t.AddUrl(u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // LogPatterns sets the glob patterns to use to match pathnames.
 type LogPatterns []string
@@ -138,19 +154,23 @@ func New(ctx context.Context, wg *sync.WaitGroup, lines chan<- *logline.LogLine,
 		lines:        lines,
 		initDone:     make(chan struct{}),
 		globPatterns: make(map[string]struct{}),
+		logUrls:      make(map[string]struct{}),
 		logstreams:   make(map[string]logstream.LogStream),
 	}
 	defer close(t.initDone)
 	if err := t.SetOption(options...); err != nil {
 		return nil, err
 	}
-	if len(t.globPatterns) == 0 {
-		glog.Info("No patterns to tail, tailer done.")
+	if len(t.globPatterns) == 0 && len(t.logUrls) == 0 {
+		glog.Info("No patterns or network addresses to tail, tailer done.")
 		close(t.lines)
 		return t, nil
 	}
 	// Guarantee all existing logs get tailed before we leave.  Also necessary
 	// in case oneshot mode is active, the logs get read!
+	if err := t.PollLogUrls(); err != nil {
+		return nil, err
+	}
 	if err := t.PollLogPatterns(); err != nil {
 		return nil, err
 	}
@@ -176,6 +196,7 @@ func New(ctx context.Context, wg *sync.WaitGroup, lines chan<- *logline.LogLine,
 }
 
 var ErrNilOption = errors.New("nil option supplied")
+var ErrUnsupportedUrl = errors.New("unsupported url supplied")
 
 // SetOption takes one or more option functions and applies them in order to Tailer.
 func (t *Tailer) SetOption(options ...Option) error {
@@ -187,6 +208,27 @@ func (t *Tailer) SetOption(options ...Option) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// AddUrl adds a url to the list of hosts and ports to listen for log events.
+func (t *Tailer) AddUrl(logUrl string) error {
+	u, err := url.Parse(logUrl)
+	if err != nil {
+		glog.V(2).Infof("Couldn't parse url %q: %s", logUrl, err)
+		return err
+	}
+	if u.Scheme != "udp" || u.Hostname() == "" {
+		glog.V(2).Infof("Couldn't parse url %q: %s", logUrl, ErrUnsupportedUrl)
+		return ErrUnsupportedUrl
+	}
+	if u.Port() == "" {
+		u.Host += ":514"
+	}
+	urlSpec := u.Scheme + "://" + u.Hostname() + ":" + u.Port()
+	t.logUrlsMu.Lock()
+	t.logUrls[urlSpec] = struct{}{}
+	t.logUrlsMu.Unlock()
 	return nil
 }
 
@@ -327,6 +369,18 @@ func (t *Tailer) StartLogPatternPollLoop(waker waker.Waker) {
 			}
 		}
 	}()
+}
+
+func (t *Tailer) PollLogUrls() error {
+	t.logUrlsMu.RLock()
+	defer t.logUrlsMu.RUnlock()
+	for url := range t.logUrls {
+		glog.V(2).Infof("watched path is %q", url)
+		if err := t.TailPath(url); err != nil {
+			glog.Info(err)
+		}
+	}
+	return nil
 }
 
 func (t *Tailer) PollLogPatterns() error {

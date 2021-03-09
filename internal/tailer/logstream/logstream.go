@@ -12,6 +12,7 @@ import (
 	"context"
 	"expvar"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -48,6 +49,11 @@ const defaultReadBufferSize = 4096
 // channel.  `seekToStart` is only used for testing and only works for regular
 // files that can be seeked.
 func New(ctx context.Context, wg *sync.WaitGroup, waker waker.Waker, pathname string, lines chan<- *logline.LogLine, streamFromStart bool) (LogStream, error) {
+	url, err := url.Parse(pathname)
+	//NOTE: url is validated in Tailer.AddUrl
+	if err == nil && url.Scheme == "udp" {
+		return newUdpSocketStream(ctx, wg, waker, url.Host, lines)
+	}
 	fi, err := os.Stat(pathname)
 	if err != nil {
 		logErrors.Add(pathname, 1)
