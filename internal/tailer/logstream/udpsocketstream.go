@@ -87,6 +87,10 @@ func (ss *udpSocketStream) stream(ctx context.Context, wg *sync.WaitGroup, waker
 			n, err := c.Read(b[:capB])
 
 			if n > 0 {
+				// Syslog is one line per packet, but doesn't include line endings
+				b = append(b, '\n')
+				n++
+
 				total += n
 				decodeAndSend(ss.ctx, ss.lines, ss.hostspec, n, b[:n], partial)
 				ss.mu.Lock()
